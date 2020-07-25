@@ -1,7 +1,8 @@
-import { gql } from 'apollo-server'
-
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const apollo_server_1 = require("apollo-server");
 // Schema
-const typeDefs = gql`
+const typeDefs = apollo_server_1.gql `
   type Usuario {
     id: ID
     nombre: String
@@ -80,6 +81,5 @@ const typeDefs = gql`
     # Clientes
     nuevoCliente(input: ClienteInput): Cliente
   }
-`
-
-export default typeDefs
+`;
+exports.default = typeDefs;
