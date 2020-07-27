@@ -2,9 +2,8 @@ import mongoose from 'mongoose'
 
 interface IProducto extends mongoose.Document {
   nombre: string
-  apellido: string
-  password: string
-  email: string
+  stock: number
+  precio: number
 }
 
 const ProductoSchema = new mongoose.Schema({
@@ -28,5 +27,8 @@ const ProductoSchema = new mongoose.Schema({
     default: Date.now(),
   },
 })
+
+// Crear un índice de tipo texto
+ProductoSchema.index({ nombre: 'text' })
 
 export default mongoose.model<IProducto>('Producto', ProductoSchema)

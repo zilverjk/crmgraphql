@@ -1,9 +1,11 @@
 import bcrypt from 'bcrypt'
 import dotenv from 'dotenv'
 import jwt from 'jsonwebtoken'
+import Pedido from '../models/Pedido'
 import Usuario from '../models/Usuario'
-// import Cliente from '../models/Cliente'
+import Cliente from '../models/Cliente'
 import Producto from '../models/Producto'
+import { isValidObjectId } from 'mongoose'
 
 dotenv.config({ path: '.env' })
 const jwtSecret: string = process.env.JWT_SECRET || ''
@@ -32,6 +34,112 @@ const resolvers = {
       if (!producto) throw new Error('Producto no encontrado')
 
       return producto
+    },
+    obtenerClientes: async () => {
+      try {
+        return await Cliente.find({})
+      } catch (error) {
+        console.log(error)
+      }
+    },
+    obtenerClientesVendedor: async (_: any, {}: any, ctx: any) => {
+      try {
+        return await Cliente.find({ vendedor: ctx.usuario.id.toString() })
+      } catch (error) {
+        console.log(error)
+      }
+    },
+    obtenerCliente: async (_: any, { id }: any, ctx: any) => {
+      // Validar existencia
+      const cliente = await Cliente.findById(id)
+      if (!cliente) throw new Error('El cliente no existe')
+
+      // Quien lo creó puede verlo
+      if (cliente.vendedor.toString() !== ctx.usuario.id) throw new Error('Acesso denegado')
+
+      return cliente
+    },
+    obtenerPedidos: async () => {
+      try {
+        return await Pedido.find({})
+      } catch (error) {
+        console.log(error)
+      }
+    },
+    obtenerPedidosVendedor: async (_: any, {}: any, ctx: any) => {
+      try {
+        return await Pedido.find({ vendedor: ctx.usuario.id })
+      } catch (error) {
+        console.log(error)
+      }
+    },
+    obtenerPedido: async (_: any, { id }: any, ctx: any) => {
+      // Validar ObjectId
+      if (!isValidObjectId(id)) throw new Error('Pedido no encontrado')
+
+      // Validar existencia
+      const pedido = await Pedido.findById(id)
+
+      if (!pedido) throw new Error('Pedido no encontrado')
+
+      // Validar seguridad
+      if (pedido.vendedor.toString() !== ctx.usuario.id) throw new Error('No autorizado')
+
+      // Retorna resultado
+      return pedido
+    },
+    obtenerPedidosEstado: async (_: any, { estado }: any, ctx: any) => {
+      return await Pedido.find({ vendedor: ctx.usuario.id, estado })
+    },
+    mejoresClientes: async () => {
+      return await Pedido.aggregate([
+        { $match: { estado: 'COMPLETADO' } },
+        {
+          $group: {
+            _id: '$clienteId',
+            total: { $sum: '$total' },
+          },
+        },
+        {
+          $lookup: {
+            from: 'clientes',
+            localField: '_id',
+            foreignField: '_id',
+            as: 'cliente',
+          },
+        },
+        {
+          $sort: { total: -1 }, // El mayor primero
+        },
+      ])
+    },
+    mejoresVendedores: async () => {
+      return await Pedido.aggregate([
+        { $match: { estado: 'COMPLETADO' } },
+        {
+          $group: {
+            _id: '$vendedor',
+            total: { $sum: '$total' },
+          },
+        },
+        {
+          $lookup: {
+            from: 'usuarios',
+            localField: '_id',
+            foreignField: '_id',
+            as: 'vendedor',
+          },
+        },
+        {
+          $limit: 3,
+        },
+        {
+          $sort: { total: -1 },
+        },
+      ])
+    },
+    buscarProducto: async (_: any, { texto }: any) => {
+      return await Producto.find({ $text: { $search: texto } }).limit(10) //limit es opcional, tambien hay paginación
     },
   },
   Mutation: {
@@ -100,12 +208,144 @@ const resolvers = {
 
       return 'Producto eliminado'
     },
-    nuevoCliente: async (_: any, { input }: any) => {
+    nuevoCliente: async (_: any, { input }: any, ctx: any) => {
+      const { email } = input
       // Verificar si esta registrado
-      console.log(input)
+
+      const alreadyExists = await Cliente.findOne({ email })
+
+      if (alreadyExists) throw new Error('Este cliente ya existe')
+
+      const cliente = new Cliente(input)
 
       // Asignarle a un vendedor
+      cliente.vendedor = ctx.usuario.id
+
       // Crear el registro en la BD
+      try {
+        return await cliente.save()
+      } catch (error) {
+        console.log(error)
+      }
+    },
+    actualizarCliente: async (_: any, { id, input }: any, ctx: any) => {
+      // Validar existencia
+      const cliente = await Cliente.findById(id)
+
+      if (!cliente) throw new Error('Cliente no existe')
+
+      // Validar que sea el vendedor sea quien edita
+      if (cliente.vendedor.toString() !== ctx.usuario.id) throw new Error('No autorizado')
+
+      // Actualizar el cliente
+      return Cliente.findOneAndUpdate({ _id: id }, input, { new: true })
+    },
+    eliminarCliente: async (_: any, { id }: any, ctx: any) => {
+      const cliente = await Cliente.findById(id)
+
+      if (!cliente) throw new Error('El Cliente no existe')
+
+      if (cliente.vendedor.toString() !== ctx.usuario.id) throw new Error('No autorizado')
+
+      await Cliente.findOneAndDelete({ _id: id })
+      return 'Cliente eliminado'
+    },
+    nuevoPedido: async (_: any, { input }: any, ctx: any) => {
+      const { clienteId } = input
+
+      // Validar existencia Cliente
+      const cliente = await Cliente.findById(clienteId)
+
+      if (!cliente) throw new Error('El cliente no existe')
+
+      // Validar que el cliente sea del vendedor
+      if (cliente.vendedor.toString() !== ctx.usuario.id) throw new Error('No autorizado')
+
+      // Revisar stock disponible
+      for await (const articulo of input.pedido) {
+        const { id } = articulo
+        const producto = await Producto.findById(id)
+
+        // Validar que el producto exista en la BD
+        if (!producto) throw new Error('El producto no existe')
+
+        // Validar stock
+        if (articulo.cantidad > producto.stock) {
+          throw new Error(`El articulo ${producto.nombre} no cuenta con stock suficiente`)
+        }
+
+        // Comprometer Stock
+        producto.stock = producto.stock - articulo.cantidad
+
+        await producto.save()
+      }
+
+      // Crear un nuevo pedido
+      const pedido = new Pedido(input)
+
+      // Asignarle un vendedor
+      pedido.vendedor = ctx.usuario.id
+
+      // Guardar en BD
+      return await pedido.save()
+    },
+    actualizarPedido: async (_: any, { id, input }: any, ctx: any) => {
+      // Validar existencia Pedido
+      const pedido = await Pedido.findById(id)
+
+      if (!pedido) throw new Error('El pedido no existe')
+
+      // Validar existencia Cliente
+      const cliente = await Cliente.findById(pedido.clienteId)
+
+      if (!cliente) throw new Error('El cliente no existe')
+
+      // Validar si el cleinte y el pedido pertenece al vendedor
+      if (cliente.vendedor.toString() !== ctx.usuario.id) throw new Error('No autorizado')
+
+      // Validar Stock
+      for await (const articulo of pedido.pedido) {
+        const { id } = articulo
+        const producto = await Producto.findById(id)
+
+        // Validar que el producto exista en la BD
+        if (!producto) throw new Error('El producto no existe')
+
+        // Validar stock
+        if (articulo.cantidad > producto.stock) {
+          throw new Error(`El articulo ${producto.nombre} no cuenta con stock suficiente`)
+        }
+
+        // Comprometer Stock
+        producto.stock = producto.stock - articulo.cantidad
+
+        await producto.save()
+      }
+
+      // Actualizar el pedido
+      return await Pedido.findOneAndUpdate({ _id: id }, input, { new: true })
+    },
+    eliminarPedido: async (_: any, { id }: any, ctx: any) => {
+      const pedido = await Pedido.findById(id)
+
+      if (!pedido) throw new Error('Pedido no encontrado')
+
+      if (pedido.vendedor.toString() !== ctx.usuario.id) throw new Error('No autorizado')
+
+      // Devolver stock
+      pedido.pedido.map(async item => {
+        const producto = await Producto.findById(item.id)
+
+        if (!producto) throw new Error('El producto no existe')
+
+        producto.stock = producto.stock + item.cantidad
+
+        await producto.save()
+      })
+
+      await Pedido.findByIdAndDelete(id)
+
+      return 'Pedido eliminado'
     },
   },
 }

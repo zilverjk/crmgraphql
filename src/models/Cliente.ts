@@ -6,6 +6,7 @@ interface ICliente extends mongoose.Document {
   empresa: string
   email: string
   telefono: string
+  vendedor: string
 }
 
 const ClienteSchema = new mongoose.Schema({
