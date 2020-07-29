@@ -18,8 +18,8 @@ const crearToken = (usuario: any, jwtSecret: string, expiresIn: string) => {
 // Resolvers
 const resolvers = {
   Query: {
-    obtenerUsuario: async (_: any, { token }: any) => {
-      return await jwt.verify(token, jwtSecret)
+    obtenerUsuario: async (_: any, {}: any, ctx: any) => {
+      return ctx.usuario
     },
     obtenerProductos: async () => {
       try {
